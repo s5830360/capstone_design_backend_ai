@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local uploads
+uploads/
+*.m4a
+*.log
+
+# IDE settings
+.DS_Store
+.idea/
+.vscode/
+
+# Model files (GitHub에 올릴 필요 없음 → Dockerfile로 배포)
+final_model/
+silero_vad/
+*.pth
+*.bin
+*.safetensors
