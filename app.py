@@ -11,10 +11,51 @@ import torch.nn.functional as F
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor
+import gdown
 
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 
 app = FastAPI()
+
+############################################################
+# 🔥 0) Google Drive에서 모델 다운로드 (Railway/로컬 모두 작동)
+############################################################
+
+FINAL_MODEL_ID = "1-gvvKDdUMnurguDM_mmbpJG7L7eei_GGn"
+SILERO_ID = "1pZrwGhzY8daIrQ_DMHds6EXjMdWc6m1h"
+PTH_ID = "162Ej3xFydrII0-vO89rsqdkhqz5yGEC0"
+
+
+def download_models():
+    # 1) final_model 폴더
+    if not os.path.exists("final_model"):
+        print("⬇️ Downloading final_model from Google Drive...")
+        gdown.download_folder(
+            f"https://drive.google.com/drive/folders/{FINAL_MODEL_ID}",
+            quiet=False, use_cookies=False
+        )
+
+    # 2) silero_vad 폴더
+    if not os.path.exists("silero_vad"):
+        print("⬇️ Downloading silero_vad from Google Drive...")
+        gdown.download_folder(
+            f"https://drive.google.com/drive/folders/{SILERO_ID}",
+            quiet=False, use_cookies=False
+        )
+
+    # 3) pth 파일
+    if not os.path.exists("env_cnn_emotion6_final_v1.pth"):
+        print("⬇️ Downloading env_cnn_emotion6_final_v1.pth...")
+        gdown.download(
+            id=PTH_ID,
+            output="env_cnn_emotion6_final_v1.pth",
+            quiet=False
+        )
+
+
+@app.on_event("startup")
+def startup_event():
+    download_models()
 
 
 ############################################################
@@ -76,19 +117,18 @@ model_vad.eval()
 
 from pathlib import Path
 import sys
-sys.path.append(str(Path("src/silero_vad").absolute()))
-from silero_vad.utils_vad import get_speech_timestamps
+sys.path.append(str(Path("silero_vad/src").absolute()))
+from utils_vad import get_speech_timestamps
 
 
 def is_voice_present_silero(audio, sr=16000):
-    """Silero 기반 VAD"""
     audio_t = torch.tensor(audio, dtype=torch.float32)
     speech_ts = get_speech_timestamps(audio_t, model_vad, sampling_rate=sr)
     return len(speech_ts) > 0
 
 
 ############################################################
-# 5) Scene → Emotion 매핑 (긍정/중립 중심)
+# 5) Scene → Emotion 매핑
 ############################################################
 SCENES = [
     "airport", "bus", "bus_stop", "metro", "metro_station",
@@ -109,11 +149,11 @@ SCENE_TO_EMOTION = {
     "unknown_noise": "surprise",
 }
 
-PREDICTION_THRESHOLD = 50.0  # 70 → 50 완화
+PREDICTION_THRESHOLD = 50.0
 
 
 ############################################################
-# 6) 학습과 동일한 환경음 전처리
+# 6) Mel-Spectrogram
 ############################################################
 def extract_melspectrogram(
         y,
@@ -123,7 +163,6 @@ def extract_melspectrogram(
         hop_length=512,
         target_length_sec=3
 ):
-    # 1) 길이 맞추기
     target_samples = int(target_length_sec * sr)
 
     if len(y) > target_samples:
@@ -132,7 +171,6 @@ def extract_melspectrogram(
         pad_len = target_samples - len(y)
         y = np.pad(y, (0, pad_len), mode="constant")
 
-    # 2) mel 생성
     mel = librosa.feature.melspectrogram(
         y=y,
         sr=sr,
@@ -141,15 +179,12 @@ def extract_melspectrogram(
         hop_length=hop_length
     )
 
-    # 3) dB
     mel_db = librosa.power_to_db(mel, ref=np.max)
 
-    # 4) 정규화(학습 동일)
     mean = mel_db.mean()
     std = mel_db.std()
     mel_norm = (mel_db - mean) / (std + 1e-6)
 
-    # 5) shape 맞추기 (1,1,64,T)
     mel_tensor = torch.tensor(mel_norm, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
 
     return mel_tensor
@@ -159,22 +194,20 @@ def extract_melspectrogram(
 # 7) ffmpeg 변환
 ############################################################
 def resolve_ffmpeg():
-    # 1) OS PATH 검색
     found = shutil.which("ffmpeg")
     if found:
         return found
 
-    # 2) Windows fallback 경로
     windows_ffmpeg = r"C:\ffmpeg\ffmpeg-8.0-essentials_build\bin\ffmpeg.exe"
     if os.path.exists(windows_ffmpeg):
         return windows_ffmpeg
 
-    # 3) Linux fallback (Railway)
     linux_ffmpeg = "/usr/bin/ffmpeg"
     if os.path.exists(linux_ffmpeg):
         return linux_ffmpeg
 
     raise FileNotFoundError("ffmpeg not found")
+
 
 def convert_to_wav(input_path, output_path):
     ffmpeg = resolve_ffmpeg()
@@ -201,20 +234,16 @@ async def predict(file: UploadFile = File(...)):
             with open(raw_path, "wb") as f:
                 f.write(contents)
 
-            # 변환
+            # mp3/m4a -> wav
             convert_to_wav(raw_path, wav_path)
 
-            # 오디오 로드
+            # wav 로드
             audio, _ = librosa.load(wav_path, sr=16000, mono=True)
 
-            # -----------------------------
-            # 1) 음성 여부 (VAD)
-            # -----------------------------
+            # ----------------------------- VAD -----------------------------
             has_voice = is_voice_present_silero(audio)
 
-            # -----------------------------
-            # 2) WavLM 음성 감정
-            # -----------------------------
+            # ----------------------------- 음성 감정 -----------------------------
             wavlm_emotion = None
             wavlm_conf = 0.0
 
@@ -235,9 +264,7 @@ async def predict(file: UploadFile = File(...)):
                     wavlm_conf = float(probs[pred_id] * 100)
                     wavlm_emotion = wavlm_labels[pred_id]
 
-            # -----------------------------
-            # 3) 환경음 감정
-            # -----------------------------
+            # ----------------------------- 환경음 감정 -----------------------------
             mel_tensor = extract_melspectrogram(audio)
 
             with torch.no_grad():
@@ -248,15 +275,12 @@ async def predict(file: UploadFile = File(...)):
             scene_conf = float(scene_probs[scene_id] * 100)
             scene_label = SCENES[scene_id]
 
-            # threshold 적용
             if scene_conf < PREDICTION_THRESHOLD:
                 scene_label = "unknown_noise"
 
             env_emotion = SCENE_TO_EMOTION.get(scene_label, "neutral")
 
-            # -----------------------------
-            # 4) 최종 감정 결정
-            # -----------------------------
+            # ----------------------------- 최종 결정 -----------------------------
             if has_voice:
                 final_emotion = wavlm_emotion
                 final_conf = wavlm_conf
@@ -264,9 +288,6 @@ async def predict(file: UploadFile = File(...)):
                 final_emotion = env_emotion
                 final_conf = scene_conf
 
-            # -----------------------------
-            # 5) 반환
-            # -----------------------------
             return {
                 "final_emotion": final_emotion,
                 "final_confidence": final_conf,

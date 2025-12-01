@@ -28,12 +28,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ⚠ GitHub에는 모델이 없지만 로컬에서는 있음 → COPY 성공함
 COPY app.py .
 
-# ------------------ 모델 디렉토리 / 파일 포함 --------------------
-COPY final_model ./final_model
-COPY silero_vad ./silero_vad
-COPY env_cnn_emotion6_final_v1.pth .
-# ------------------------------------------------------
-
 # 프로젝트 전체 복사 (단, 위에서 복사한 모델 덮어쓰지 않음)
 COPY . .
 

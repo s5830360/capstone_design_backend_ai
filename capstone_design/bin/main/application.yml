@@ -1,0 +1,32 @@
+spring:
+  datasource:
+    url: jdbc:mariadb://localhost:3308/capstone?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Seoul&allowPublicKeyRetrieval=true
+    username: capuser
+    password: cappw
+    driver-class-name: org.mariadb.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update         # 개발 단계는 update, 나중엔 validate/none + Flyway 권장
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MariaDBDialect
+    open-in-view: false
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+logging:
+  level:
+    org.hibernate.SQL: debug
+    org.hibernate.type.descriptor.sql.BasicBinder: trace
+
+jwt:
+  secret: "Vq7L2tH9mD4xP1yA6uR8cN3wF5kZ0sJ2eT7gB4qL9pX6vM1rC8dY3hW5nU0aE2"
+  expiration-seconds: 36000 #10시간
+
+storage:
+  root: "${user.home}/capstone_uploads"
